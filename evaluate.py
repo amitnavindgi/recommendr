@@ -1,38 +1,94 @@
-from model import Posts, Users
+__author__ = 'sandeep'
+
+import xml.etree.ElementTree
+import re
 import pickle
-import sys
 import util
+from sklearn.linear_model import Perceptron
+from sklearn.feature_extraction import FeatureHasher
 
-def main(test_set):
-    """ test_set is a list of post ids """
-    
-    test_set_questions = Posts.select().where(Posts.id << test_set)
-    for Post in test_set_questions:
-        answers = Posts.select().where((Posts.posttypeid == 2) & (Posts.parentid == Post.id))
-        #print answers.count()
-        
-        answer_details = []     # List of tuple (score, user_id)
-        for answer in answers:
-            if answer.owneruserid is not None:
-                answer_details.append((answer.score, answer.owneruserid.id))
-            else: 
-                pass
-                #print "None user object"
-        
-        answer_details = sorted(answer_details, key=lambda tup: tup[0], reverse=True)
-        user_ids = [tup[1] for tup in answer_details]
+def testPredictEval(up, tgen, kSet, evaluationpost):
 
-        tags = util.getTagList(Post.tags)
-        
-        #TODO call feature generator
-        #TODO Call predictor
-        #TODO Do some computation using the results of predictor
+   # query = query[0:9]
+    pak = dict((k,0) for k in kSet)
+    mrr = 0
 
 
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage:", sys.argv[0], "/path/to/test_file_pickle")
+        #print("labels="+str(answerUserIds).strip('[]'))
+
+   for i, userId in enumerate(predictions):
+       if userId in answerUserIds:
+           mrr += 1/float(i+1)
+           break
+
+   pakpq = dict((k,0) for k in kSet)
+   for k in kSet:
+       present = False
+       for userId in answerUserIds:
+           if userId in predictions[:k]:
+               pak[k] += 1
+               pakpq[k] += 1
+
+               # userAnswerMap = dict((ans.owneruserid.id, ans) for ans in answers if ans.owneruserid is not None and ans.score > 0)
+               # for k in kSet:
+               #     rel = [userAnswerMap[userId].score for userId in predictions[:k] if userId in userAnswerMap]
+
+               #print("PAK per question for {0} = {1}".format(question.id, repr(pakpq)))
+
+    # normalize
+    queryCount = 100
+    mrr /= queryCount
+    pak = [(k, count/float(k*queryCount)) for k, count in pak.items()]
+    return (pak, mrr)
+
+e = xml.etree.ElementTree.parse('Posts.xml').getroot()
+posts = {}
+with open('tm_out', 'r') as doc:
+    documents = pickle.load(doc)
+for a in e.findall('row'):
+    tags = a.get('Tags')
+    id = a.get('Id')
+    type = a.get('PostTypeId')
+    user = a.get('OwnerUserId')
+
+    if(id in posts):
+        cs = posts[id]
     else:
-        with open(sys.argv[1], 'r') as fin:
-            test_set = pickle.load(fin)
-        main(test_set)
+        cs = ""
+    tags = [m.group(1) for m in re.finditer(r'\<([^\>]*)\>', tags)]
+    for tag in tags:
+        cs += "\t" + tag
+    if(id in documents):
+        for items in documents[id]:
+            cs += "\t" + str(items[0])
+    posts[id] = cs
+
+evaluationposts = []
+for a in posts:
+    type = a.get('PostTypeId')
+    pId = a.get("ParentId")
+    user = a.get('OwnerUserId')
+    length = a.get('Length')
+    accepted = a.get('Accepted')
+    ownerrep = a.get('Ownerreputation')
+    score = a.get('Score')
+    if(type == '2'):
+        if(user is not None):
+            for b in posts:
+                if b.get("ParentTd") == a.get('Id') and a.get('forevaluation') == 1:
+                    evaluationposts.append(a+b)
+set = [1,5,10]
+methods = {
+ #       "Topic Modelling": (config.USER_PREDICTOR_TM, TopicModel),
+        "Post Tags": (TagFeatureGen),
+        "Combined": (TagTMFeatureGen)
+    }
+
+results = []
+for name, (upFilename, tgenClass) in methods.items():
+    for evaluationpost in evaluationposts:
+        file = open(upFilename, "r")
+        up = pickle.load(file)
+        file.close()
+        tgen = tgenClass()
+        results[name] = testPredictEval(up, tgen, set, evaluationpost)
